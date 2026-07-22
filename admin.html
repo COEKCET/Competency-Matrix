@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Console | Competency Matrix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  @media print {
+    .topbar, .tabs, .no-print { display:none !important; }
+    .container { padding:0 !important; max-width:100% !important; }
+    body { background:#fff !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app-shell">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="crest">KE</div>
+      <div class="brand-text">
+        <div class="name">Competency Matrix</div>
+        <div class="sub">CoE Admin Console</div>
+      </div>
+    </div>
+    <div class="who">
+      <span style="display:flex;align-items:center;gap:8px">
+        System entry:
+        <label class="switch"><input type="checkbox" id="globalLockToggle"><span class="slider"></span></label>
+        <span id="globalLockLabel">Locked</span>
+      </span>
+      <button class="btn-ghost-light" id="logoutBtn">Log out</button>
+    </div>
+  </div>
+
+  <div class="container">
+
+    <div class="grid-4 mb-24" id="statCards"></div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="faculty">Faculty</button>
+      <button class="tab-btn" data-tab="notentered">Not Entered</button>
+      <button class="tab-btn" data-tab="reports">Board Reports</button>
+      <button class="tab-btn" data-tab="allocation">QP Allocation</button>
+      <button class="tab-btn" data-tab="print">Print / Export</button>
+    </div>
+
+    <!-- ============ FACULTY TAB ============ -->
+    <div class="tab-panel active" id="tab-faculty">
+      <div class="card">
+        <div class="card-head">
+          <h3>All faculty</h3>
+          <select id="facDeptFilter" class="pill-select"><option value="">All departments</option></select>
+        </div>
+        <div class="card-pad table-wrap">
+          <table id="facultyTable">
+            <thead><tr>
+              <th>Name</th><th>Dept</th><th>Designation</th><th>Experience</th>
+              <th>Status</th><th>Lock</th><th>Edit request</th><th></th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ NOT ENTERED TAB ============ -->
+    <div class="tab-panel" id="tab-notentered">
+      <div class="card">
+        <div class="card-head">
+          <h3>Faculty who have not submitted</h3>
+          <button class="btn btn-outline btn-sm" id="exportNotEnteredBtn">Export Excel</button>
+        </div>
+        <div class="card-pad table-wrap">
+          <table id="notEnteredTable">
+            <thead><tr><th>Name</th><th>Dept</th><th>Designation</th><th>Experience</th><th>Email</th><th>Mobile</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ BOARD REPORTS TAB ============ -->
+    <div class="tab-panel" id="tab-reports">
+      <div class="card">
+        <div class="card-head">
+          <h3>Board-wise course & rating report</h3>
+          <div class="flex gap-8">
+            <select id="reportBoardSelect" class="pill-select"><option value="">Choose board…</option></select>
+            <button class="btn btn-outline btn-sm" id="exportReportExcelBtn">Excel</button>
+            <button class="btn btn-outline btn-sm" id="exportReportPdfBtn">PDF</button>
+          </div>
+        </div>
+        <div class="card-pad">
+          <div class="hint mb-16">Faculty with less than 2 years of experience are excluded from this report.</div>
+          <div id="reportWrap"><div class="empty-state"><div class="glyph">📊</div>Choose a board to view its report.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ QP ALLOCATION TAB ============ -->
+    <div class="tab-panel" id="tab-allocation">
+      <div class="card">
+        <div class="card-head">
+          <h3>Question paper allocation</h3>
+          <select id="allocBoardSelect" class="pill-select"><option value="">Choose board…</option></select>
+        </div>
+        <div class="card-pad">
+          <div class="hint mb-16">Each faculty member can be allotted a maximum of <strong>3</strong> question papers. Faculty already handling a course in the current semester are not listed as candidates for that course. Choosing a faculty member here locks the paper against that course.</div>
+          <div id="allocWrap"><div class="empty-state"><div class="glyph">📝</div>Choose a board to begin allocation.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ PRINT TAB ============ -->
+    <div class="tab-panel" id="tab-print">
+      <div class="card no-print">
+        <div class="card-head">
+          <h3>Print board-wise allocation sheet</h3>
+          <div class="flex gap-8">
+            <select id="printBoardSelect" class="pill-select"><option value="">Choose board…</option></select>
+            <button class="btn btn-outline btn-sm" id="printExportPdfBtn">Download PDF</button>
+            <button class="btn btn-primary btn-sm" id="printNowBtn">Print</button>
+          </div>
+        </div>
+      </div>
+      <div id="printSheet" class="card card-pad mt-16" style="display:none">
+        <div class="center mb-24">
+          <h2 style="margin-bottom:2px">Kamaraj Engineering College of Engineering and Technology</h2>
+          <div class="muted">Board-wise Course Allocation & Faculty Competency</div>
+          <div class="muted" id="printBoardTitle" style="font-weight:700;margin-top:6px"></div>
+        </div>
+        <div id="printBody"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/admin.js"></script>
+</body>
+</html>

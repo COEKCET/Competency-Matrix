@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Faculty Dashboard | Competency Matrix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app-shell">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="crest">KE</div>
+      <div class="brand-text">
+        <div class="name">Competency Matrix</div>
+        <div class="sub">Faculty Workspace</div>
+      </div>
+    </div>
+    <div class="who">
+      <span id="whoName">—</span>
+      <button class="btn-ghost-light" id="changePwBtn">Change Password</button>
+      <button class="btn-ghost-light" id="logoutBtn">Log out</button>
+    </div>
+  </div>
+
+  <div class="container">
+
+    <div id="statusBanner" class="mb-24" style="display:none"></div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="profile">My Profile</button>
+      <button class="tab-btn" data-tab="matrix">Competency Ratings</button>
+      <button class="tab-btn" data-tab="review">Review &amp; Submit</button>
+    </div>
+
+    <!-- ============ PROFILE TAB ============ -->
+    <div class="tab-panel active" id="tab-profile">
+      <div class="card card-pad">
+        <div class="flex-between mb-16">
+          <h2 style="margin:0">Faculty Profile</h2>
+          <span class="badge badge-gold" id="deptBadge">—</span>
+        </div>
+        <div class="grid-3" id="profileGrid"><!-- filled by JS --></div>
+        <div class="divider"></div>
+        <div class="grid-2">
+          <div class="field" style="margin-bottom:0">
+            <label>Total teaching experience</label>
+            <div class="flex gap-8">
+              <input type="number" id="expYears" min="0" placeholder="Years" style="width:100%">
+              <input type="number" id="expMonths" min="0" max="11" placeholder="Months" style="width:100%">
+              <button class="btn btn-outline btn-sm" id="saveExpBtn">Save</button>
+            </div>
+            <div class="hint">Editing this updates the master faculty record in the Google Sheet.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ MATRIX TAB ============ -->
+    <div class="tab-panel" id="tab-matrix">
+      <div class="card">
+        <div class="card-head">
+          <h3>Select your board</h3>
+          <select id="boardSelect" class="pill-select">
+            <option value="">Choose a board…</option>
+          </select>
+        </div>
+        <div class="card-pad">
+          <div class="legend-strip mb-16">
+            <div class="legend-item"><span class="legend-dot" style="background:#B3402A"></span>1 · Beginner</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#C4713B"></span>2 · Developing</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#C89B3C"></span>3 · Competent</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#6E8B4F"></span>4 · Proficient</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#2E7D5B"></span>5 · Expert</div>
+          </div>
+          <div id="courseListWrap">
+            <div class="empty-state"><div class="glyph">📋</div>Choose a board above to view its courses.</div>
+          </div>
+        </div>
+      </div>
+      <div class="flex-between mt-16">
+        <span class="muted" style="font-size:13px" id="matrixSaveStatus"></span>
+        <button class="btn btn-outline" id="saveProgressBtn">Save Progress</button>
+      </div>
+    </div>
+
+    <!-- ============ REVIEW TAB ============ -->
+    <div class="tab-panel" id="tab-review">
+      <div class="card">
+        <div class="card-head"><h3>Review your responses</h3></div>
+        <div class="card-pad">
+          <div id="reviewWrap">
+            <div class="empty-state"><div class="glyph">🗒️</div>No responses entered yet.</div>
+          </div>
+        </div>
+      </div>
+      <div class="flex-between mt-16">
+        <span class="muted" style="font-size:13px" id="reviewCount"></span>
+        <button class="btn btn-primary" id="submitBtn">Submit Final Response</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Change password modal -->
+<div class="modal-overlay" id="pwModal" style="display:none">
+  <div class="modal">
+    <div class="modal-head"><h3>Change password</h3></div>
+    <div class="modal-body">
+      <div class="field"><label>Current password</label><input type="password" id="curPass"></div>
+      <div class="field"><label>New password</label><input type="password" id="np1"></div>
+      <div class="field"><label>Confirm new password</label><input type="password" id="np2"></div>
+      <div class="error-text" id="pwModalError"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-outline" id="pwCancelBtn">Cancel</button>
+      <button class="btn btn-primary" id="pwUpdateBtn">Update</button>
+    </div>
+  </div>
+</div>
+
+<!-- Submit confirmation modal -->
+<div class="modal-overlay" id="submitModal" style="display:none">
+  <div class="modal">
+    <div class="modal-head"><h3>Submit final response?</h3></div>
+    <div class="modal-body">
+      <p class="muted" style="font-size:13.5px;line-height:1.6">Once submitted, you will not be able to edit your competency ratings unless the CoE admin grants you edit permission. Please confirm your entries are correct.</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-outline" id="submitCancelBtn">Go back</button>
+      <button class="btn btn-primary" id="submitConfirmBtn">Confirm & Submit</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/faculty.js"></script>
+</body>
+</html>
