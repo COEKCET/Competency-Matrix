@@ -3,7 +3,7 @@
    Paste the Google Apps Script Web App URL here after deployment.
    Deployment steps are in docs/SETUP_GUIDE.md
    ============================================================ */
-const API_URL = "https://script.google.com/macros/s/AKfycbyLtBn6J0HEwq9LD1FnNZnpcli4nVyRbs2Lhm6pTWZu6_xI13727JAuFtVnAJb4F99NOg/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycby9dziWIZwLtrcVnRfsYqTuO4WQNPqW4XKZ0U-RcCHsy6V3Wwwq9InbBGizcBBkg6EYwQ/exec";
 
 /* ------------------------------------------------------------
    callApi(action, payload)
