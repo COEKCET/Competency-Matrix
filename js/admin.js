@@ -25,6 +25,10 @@ async function init() {
     renderFacultyTable();
     renderNotEntered();
     populateBoardSelects();
+
+    bindSaveBarControls("allocBoardSelect", "allocSaveBtn", "allocDiscardBtn", renderAllocation);
+    bindSaveBarControls("facPrefBoardSelect", "facPrefSaveBtn", "facPrefDiscardBtn", renderFacultyPreferences);
+    bindSaveBarControls("matrixBoardSelect", "matrixSaveBtn", "matrixDiscardBtn", renderBoardMatrix);
   } catch (err) {
     toast(err.message, "error", 6000);
   } finally {
@@ -297,6 +301,34 @@ function getPending(board) {
 }
 function pendingCount(board) { return Object.keys(getPending(board)).length; }
 
+/* ---- Fixed Save/Discard bar (lives in the HTML, right after each
+   course list — NOT re-created on every render). We bind the click
+   handlers ONCE at startup; each handler reads the currently
+   selected board straight from its tab's <select> at click time,
+   so it always acts on whatever board is on screen. Each render
+   just calls updateSaveBar() to show/hide it and update the count. ---- */
+function bindSaveBarControls(boardSelId, saveId, discardId, rerender) {
+  const saveBtn = document.getElementById(saveId);
+  const discardBtn = document.getElementById(discardId);
+  if (saveBtn) saveBtn.addEventListener("click", () => {
+    const board = document.getElementById(boardSelId).value;
+    if (board) saveAllocChanges(board, () => rerender(board));
+  });
+  if (discardBtn) discardBtn.addEventListener("click", () => {
+    const board = document.getElementById(boardSelId).value;
+    if (board) { ALLOC_PENDING[board] = {}; rerender(board); }
+  });
+}
+
+function updateSaveBar(board, barId, textId) {
+  const n = pendingCount(board);
+  const bar = document.getElementById(barId);
+  const text = document.getElementById(textId);
+  if (!bar) return;
+  bar.style.display = n ? "flex" : "none";
+  if (text) text.textContent = n ? `✏️ ${n} unsaved allocation change${n > 1 ? "s" : ""} for ${board}` : "";
+}
+
 async function ensureBoardBundle(board) {
   if (ALLOC_CACHE[board]) return ALLOC_CACHE[board];
   const bundle = await callApi("adminGetBoardAllocBundle", { board });
@@ -360,29 +392,6 @@ function stagePendingChange(board, entry) {
   pending[entry.code] = entry; // {code, name, email, facultyName, action:'allocate'}
 }
 
-function saveBarHtml(board) {
-  const n = pendingCount(board);
-  if (!n) return "";
-  return `
-    <div class="locked-banner" style="background:#FFF6E5;border-color:#F0C36D;justify-content:space-between;margin-bottom:14px">
-      <span>✏️ ${n} unsaved allocation change${n > 1 ? "s" : ""} for <strong>${board}</strong></span>
-      <span class="flex gap-8">
-        <button class="btn btn-outline btn-sm" id="discardAllocBtn">Discard</button>
-        <button class="btn btn-primary btn-sm" id="saveAllocBtn">Save changes</button>
-      </span>
-    </div>`;
-}
-
-function bindSaveBar(board, rerender) {
-  const discardBtn = document.getElementById("discardAllocBtn");
-  const saveBtn = document.getElementById("saveAllocBtn");
-  if (discardBtn) discardBtn.addEventListener("click", () => {
-    ALLOC_PENDING[board] = {};
-    rerender();
-  });
-  if (saveBtn) saveBtn.addEventListener("click", () => saveAllocChanges(board, rerender));
-}
-
 async function saveAllocChanges(board, rerender) {
   const changes = Object.values(getPending(board));
   if (!changes.length) return;
@@ -428,9 +437,10 @@ function renderAllocation(board) {
   const countByEmail = effectiveCountByEmail(board);
 
   renderNotAllottedBanner("allocNotAllottedWrap", effectiveNotAllotted(board));
+  updateSaveBar(board, "allocSaveBar", "allocPendingText");
 
   const wrap = document.getElementById("allocWrap");
-  wrap.innerHTML = saveBarHtml(board) + bundle.courseWise.map(c => {
+  wrap.innerHTML = bundle.courseWise.map(c => {
     const eff = allocMap[c.code];
     let badgeName = null, rating = null, isPending = false;
     if (eff) {
@@ -486,8 +496,6 @@ function renderAllocation(board) {
     </div>`;
   }).join("");
 
-  bindSaveBar(board, () => renderAllocation(board));
-
   wrap.querySelectorAll(".allocBtn").forEach(btn => {
     btn.addEventListener("click", (e) => {
       const { code, name, email, facname } = e.target.dataset;
@@ -522,15 +530,15 @@ function renderFacultyPreferences(board) {
   const allocMap = effectiveAllocByCode(board);
   const countByEmail = effectiveCountByEmail(board);
   renderNotAllottedBanner("facPrefNotAllottedWrap", effectiveNotAllotted(board));
+  updateSaveBar(board, "facPrefSaveBar", "facPrefPendingText");
 
   const wrap = document.getElementById("facPrefWrap");
   if (!bundle.facultyPref.length) {
-    wrap.innerHTML = saveBarHtml(board) + `<div class="empty-state"><div class="glyph">🧑‍🏫</div>No faculty have submitted ratings for this board yet.</div>`;
-    bindSaveBar(board, () => renderFacultyPreferences(board));
+    wrap.innerHTML = `<div class="empty-state"><div class="glyph">🧑‍🏫</div>No faculty have submitted ratings for this board yet.</div>`;
     return;
   }
 
-  wrap.innerHTML = saveBarHtml(board) + bundle.facultyPref.map(f => {
+  wrap.innerHTML = bundle.facultyPref.map(f => {
     const liveCount = countByEmail[norm(f.email)] ?? f.allocCount;
     return `
     <div class="card mb-16" style="border-color:var(--line)">
@@ -581,8 +589,6 @@ function renderFacultyPreferences(board) {
     </div>`;
   }).join("");
 
-  bindSaveBar(board, () => renderFacultyPreferences(board));
-
   wrap.querySelectorAll(".facPrefAllocBtn").forEach(btn => {
     btn.addEventListener("click", (e) => {
       const { code, name, email, facname } = e.target.dataset;
@@ -617,15 +623,15 @@ function renderBoardMatrix(board) {
   const allocMap = effectiveAllocByCode(board);
   const countByEmail = effectiveCountByEmail(board);
   renderNotAllottedBanner("matrixNotAllottedWrap", effectiveNotAllotted(board));
+  updateSaveBar(board, "matrixSaveBar", "matrixPendingText");
 
   const wrap = document.getElementById("matrixWrap");
   if (!bundle.matrix.length || !bundle.matrixCourses.length) {
-    wrap.innerHTML = saveBarHtml(board) + `<div class="empty-state"><div class="glyph">🔲</div>No ratings submitted for this board yet.</div>`;
-    bindSaveBar(board, () => renderBoardMatrix(board));
+    wrap.innerHTML = `<div class="empty-state"><div class="glyph">🔲</div>No ratings submitted for this board yet.</div>`;
     return;
   }
 
-  wrap.innerHTML = saveBarHtml(board) + `
+  wrap.innerHTML = `
     <div class="table-wrap">
     <table>
       <thead>
@@ -667,8 +673,6 @@ function renderBoardMatrix(board) {
     </div>
     <div class="hint mt-16">Green ✓ = allotted to that faculty (click to remove) · yellow ⏳ = staged, not saved yet (click to undo) · grey number = rated but not available · outlined button = click to allocate.</div>
   `;
-
-  bindSaveBar(board, () => renderBoardMatrix(board));
 
   wrap.querySelectorAll(".matrixCellBtn").forEach(btn => {
     btn.addEventListener("click", (e) => {
