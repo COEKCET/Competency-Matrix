@@ -9,7 +9,8 @@ let STATE = {
   locked: false,       // hard lock by admin (cannot enter at all)
   submitted: false,    // already submitted final
   editAllowed: false,  // admin granted edit after submission
-  systemLocked: false  // global lock switch
+  systemLocked: false, // global lock switch
+  visitedBoards: new Set() // boards the faculty has opened — every course in these must be rated before submit
 };
 
 async function init() {
@@ -190,8 +191,22 @@ function renderCourseList(board) {
     wrap.innerHTML = `<div class="empty-state"><div class="glyph">📭</div>No courses configured for this board yet.</div>`;
     return;
   }
+
+  // store meta for later review/save (must happen before counting/highlighting)
+  courses.forEach(c => {
+    if (!STATE.responses[c.courseCode]) STATE.responses[c.courseCode] = {};
+    Object.assign(STATE.responses[c.courseCode], {
+      board: c.board, courseCode: c.courseCode, courseName: c.courseName, year: c.year, sem: c.sem
+    });
+  });
+  STATE.visitedBoards.add(board);
+
   const ro = isReadOnly();
+  const ratedCount = courses.filter(c => STATE.responses[c.courseCode] && STATE.responses[c.courseCode].rating).length;
   wrap.innerHTML = `
+    <div class="flex-between mb-8">
+      <span class="muted" style="font-size:12.5px">Rated <strong>${ratedCount}</strong> of <strong>${courses.length}</strong> courses — all must be rated before you can submit.</span>
+    </div>
     <div class="table-wrap">
     <table>
       <thead><tr>
@@ -202,7 +217,7 @@ function renderCourseList(board) {
         ${courses.map(c => {
           const resp = STATE.responses[c.courseCode] || {};
           return `
-          <tr data-code="${c.courseCode}">
+          <tr data-code="${c.courseCode}" class="${!resp.rating ? "row-missing" : ""}">
             <td class="muted">${c.year} / ${c.sem}</td>
             <td style="font-family:var(--font-mono);font-weight:600">${c.courseCode}</td>
             <td>${c.courseName}</td>
@@ -224,14 +239,6 @@ function renderCourseList(board) {
     </table>
     </div>
   `;
-
-  // store meta for later review/save
-  courses.forEach(c => {
-    if (!STATE.responses[c.courseCode]) STATE.responses[c.courseCode] = {};
-    Object.assign(STATE.responses[c.courseCode], {
-      board: c.board, courseCode: c.courseCode, courseName: c.courseName, year: c.year, sem: c.sem
-    });
-  });
 }
 
 function bindMatrixEvents() {
@@ -243,9 +250,16 @@ function bindMatrixEvents() {
     const ladder = rung.closest(".rating-ladder");
     const code = ladder.dataset.code;
     const val = parseInt(rung.dataset.v, 10);
+    const wasUnrated = !STATE.responses[code].rating;
     STATE.responses[code].rating = val;
     ladder.querySelectorAll(".rung").forEach(r => r.classList.toggle("active", parseInt(r.dataset.v, 10) === val));
     ladder.parentElement.querySelector(".ladder-label").textContent = RATING_LABELS[val];
+    const row = ladder.closest("tr");
+    if (row) row.classList.remove("row-missing");
+    if (wasUnrated) {
+      const counterEl = wrap.querySelector(".flex-between .muted strong");
+      if (counterEl) counterEl.textContent = String(parseInt(counterEl.textContent, 10) + 1);
+    }
   });
   wrap.addEventListener("change", (e) => {
     if (isReadOnly()) return;
@@ -272,11 +286,50 @@ async function saveProgress() {
   }
 }
 
+/* ---------------- Mandatory completion check ---------------- */
+// A board is only "required" once the faculty has opened it (STATE.visitedBoards).
+// Every course in a visited board must carry a rating — no skipping allowed.
+function validateCompletion() {
+  const missing = {};
+  STATE.visitedBoards.forEach(board => {
+    const courses = STATE.courses.filter(c => c.board === board);
+    const missingCodes = courses
+      .filter(c => !STATE.responses[c.courseCode] || !STATE.responses[c.courseCode].rating)
+      .map(c => c.courseCode);
+    if (missingCodes.length) missing[board] = missingCodes;
+  });
+  return { valid: Object.keys(missing).length === 0, missing };
+}
+
+function showMissingCoursesWarning(missing) {
+  const boards = Object.keys(missing);
+  const parts = boards.map(b => {
+    const codes = missing[b];
+    const shown = codes.slice(0, 6).join(", ") + (codes.length > 6 ? "…" : "");
+    return `${b}: ${codes.length} not rated (${shown})`;
+  });
+  toast("Every course must be rated — none can be skipped. " + parts.join(" | "), "error", 8000);
+
+  // Jump to the matrix tab, first incomplete board, and highlight the missing rows.
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+  document.querySelector('.tab-btn[data-tab="matrix"]').classList.add("active");
+  document.getElementById("tab-matrix").classList.add("active");
+
+  const firstBoard = boards[0];
+  document.getElementById("boardSelect").value = firstBoard;
+  renderCourseList(firstBoard);
+}
+
 /* ---------------- Review & Submit ---------------- */
 function bindReviewEvents() {
   document.getElementById("submitBtn").addEventListener("click", () => {
-    const rated = Object.values(STATE.responses).filter(r => r.rating);
-    if (!rated.length) { toast("Please rate at least one course before submitting.", "error"); return; }
+    if (!STATE.visitedBoards.size) {
+      toast("Please choose a board and rate its courses before submitting.", "error");
+      return;
+    }
+    const { valid, missing } = validateCompletion();
+    if (!valid) { showMissingCoursesWarning(missing); return; }
     document.getElementById("submitModal").style.display = "flex";
   });
   document.getElementById("submitCancelBtn").addEventListener("click", () => {
@@ -317,6 +370,12 @@ function renderReview() {
 }
 
 async function finalSubmit() {
+  const { valid, missing } = validateCompletion();
+  if (!valid) {
+    document.getElementById("submitModal").style.display = "none";
+    showMissingCoursesWarning(missing);
+    return;
+  }
   const btn = document.getElementById("submitConfirmBtn");
   btn.disabled = true;
   btn.textContent = "Submitting...";
