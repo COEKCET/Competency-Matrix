@@ -268,25 +268,180 @@ document.getElementById("exportReportPdfBtn").addEventListener("click", () => {
   doc.save(`Board_Report_${currentReport.board}.pdf`);
 });
 
+/* ================================================================
+   SHARED ALLOCATION STATE
+   (QP Allocation / Faculty Preference / Board Matrix)
+   ------------------------------------------------------------
+   Selecting a board loads ALL THREE views in a single request
+   (adminGetBoardAllocBundle) and caches the result in ALLOC_CACHE.
+   Clicking Allocate / Remove / a matrix cell never calls the
+   backend directly — it stages the change in ALLOC_PENDING and
+   re-renders from cache + pending instantly (counts, locks, and
+   colours all update with zero network delay). Switching between
+   the three tabs, or re-selecting the same board, reuses the same
+   cache — no repeated reloads.
+
+   A single shared "Save changes" bar (rendered into whichever tab
+   is open) batches every staged change for that board into ONE
+   adminBatchAllocate call. If saving would still leave courses
+   unallotted, the admin gets a confirm dialog listing them first.
+   ================================================================ */
+const ALLOC_CACHE = {};   // board -> bundle {courseWise, facultyPref, matrixCourses, matrix, notAllotted}
+const ALLOC_PENDING = {}; // board -> { [courseCode]: {code, name, email, facultyName, action} }
+
+function norm(x) { return String(x || "").trim().toLowerCase(); }
+
+function getPending(board) {
+  if (!ALLOC_PENDING[board]) ALLOC_PENDING[board] = {};
+  return ALLOC_PENDING[board];
+}
+function pendingCount(board) { return Object.keys(getPending(board)).length; }
+
+async function ensureBoardBundle(board) {
+  if (ALLOC_CACHE[board]) return ALLOC_CACHE[board];
+  const bundle = await callApi("adminGetBoardAllocBundle", { board });
+  ALLOC_CACHE[board] = bundle;
+  return bundle;
+}
+
+/* Effective (base + pending) map of courseCode -> {email, pending?:true} */
+function effectiveAllocByCode(board) {
+  const bundle = ALLOC_CACHE[board];
+  const map = {};
+  if (!bundle) return map;
+  bundle.matrixCourses.forEach(c => { if (c.allocatedTo) map[c.code] = { email: c.allocatedTo }; });
+  Object.values(getPending(board)).forEach(ch => {
+    if (ch.action === "allocate") map[ch.code] = { email: ch.email, pending: true };
+    else if (ch.action === "unallocate") delete map[ch.code];
+  });
+  return map;
+}
+
+/* Effective per-faculty allocation counts (base + pending deltas) */
+function effectiveCountByEmail(board) {
+  const bundle = ALLOC_CACHE[board];
+  const counts = {};
+  if (!bundle) return counts;
+  bundle.matrix.forEach(row => { counts[norm(row.email)] = row.allocCount; });
+  Object.values(getPending(board)).forEach(ch => {
+    const k = norm(ch.email);
+    if (ch.action === "allocate") counts[k] = (counts[k] || 0) + 1;
+    else if (ch.action === "unallocate") counts[k] = Math.max(0, (counts[k] || 0) - 1);
+  });
+  return counts;
+}
+
+function effectiveNotAllotted(board) {
+  const bundle = ALLOC_CACHE[board];
+  if (!bundle) return [];
+  const allocMap = effectiveAllocByCode(board);
+  return bundle.matrixCourses.filter(c => !allocMap[c.code]).map(c => c.code);
+}
+
+/* Stage a change locally — no network call.
+   For 'unallocate', the original allotted email (if any) is looked
+   up from the base bundle so the faculty count is decremented for
+   the right person. If the course was only staged as a *pending*
+   allocation (never actually saved), unallocate just un-stages it. */
+function stagePendingChange(board, entry) {
+  const pending = getPending(board);
+  const bundle = ALLOC_CACHE[board];
+  const courseMeta = bundle.matrixCourses.find(c => c.code === entry.code) || {};
+  const originalEmail = courseMeta.allocatedTo || null;
+
+  if (entry.action === "unallocate") {
+    if (!originalEmail) {
+      delete pending[entry.code]; // was only a pending allocation — cancel the stage
+      return;
+    }
+    pending[entry.code] = { code: entry.code, action: "unallocate", email: originalEmail };
+    return;
+  }
+  pending[entry.code] = entry; // {code, name, email, facultyName, action:'allocate'}
+}
+
+function saveBarHtml(board) {
+  const n = pendingCount(board);
+  if (!n) return "";
+  return `
+    <div class="locked-banner" style="background:#FFF6E5;border-color:#F0C36D;justify-content:space-between;margin-bottom:14px">
+      <span>✏️ ${n} unsaved allocation change${n > 1 ? "s" : ""} for <strong>${board}</strong></span>
+      <span class="flex gap-8">
+        <button class="btn btn-outline btn-sm" id="discardAllocBtn">Discard</button>
+        <button class="btn btn-primary btn-sm" id="saveAllocBtn">Save changes</button>
+      </span>
+    </div>`;
+}
+
+function bindSaveBar(board, rerender) {
+  const discardBtn = document.getElementById("discardAllocBtn");
+  const saveBtn = document.getElementById("saveAllocBtn");
+  if (discardBtn) discardBtn.addEventListener("click", () => {
+    ALLOC_PENDING[board] = {};
+    rerender();
+  });
+  if (saveBtn) saveBtn.addEventListener("click", () => saveAllocChanges(board, rerender));
+}
+
+async function saveAllocChanges(board, rerender) {
+  const changes = Object.values(getPending(board));
+  if (!changes.length) return;
+
+  const missing = effectiveNotAllotted(board);
+  if (missing.length) {
+    const ok = window.confirm(
+      `${missing.length} course(s) in ${board} will still be unallotted after saving:\n\n` +
+      missing.join(", ") +
+      `\n\nSave anyway?`
+    );
+    if (!ok) return;
+  }
+
+  try {
+    const bundle = await callApi("adminBatchAllocate", { board, changes });
+    ALLOC_CACHE[board] = bundle;   // one fresh bundle back from the batch call
+    ALLOC_PENDING[board] = {};
+    toast(`Saved ${changes.length} allocation change${changes.length > 1 ? "s" : ""}.`, "success");
+    rerender();
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
 /* ---------------- QP Allocation (course-wise) ---------------- */
 async function loadAllocation(board) {
   const wrap = document.getElementById("allocWrap");
-  document.getElementById("allocNotAllottedWrap").innerHTML = "";
-  if (!board) { wrap.innerHTML = `<div class="empty-state"><div class="glyph">📝</div>Choose a board to begin allocation.</div>`; return; }
+  const bannerWrap = document.getElementById("allocNotAllottedWrap");
+  if (!board) { wrap.innerHTML = `<div class="empty-state"><div class="glyph">📝</div>Choose a board to begin allocation.</div>`; bannerWrap.innerHTML = ""; return; }
   wrap.innerHTML = `<div class="center" style="padding:30px"><div class="loader dark" style="margin:0 auto"></div></div>`;
   try {
-    const data = await callApi("adminGetAllocationData", { board });
-    renderNotAllottedBanner("allocNotAllottedWrap", data.notAllotted);
-    renderAllocation(board, data);
+    await ensureBoardBundle(board);
+    renderAllocation(board);
   } catch (e) {
     wrap.innerHTML = `<div class="empty-state">${e.message}</div>`;
   }
 }
 
-function renderAllocation(board, data) {
+function renderAllocation(board) {
+  const bundle = ALLOC_CACHE[board];
+  const allocMap = effectiveAllocByCode(board);
+  const countByEmail = effectiveCountByEmail(board);
+
+  renderNotAllottedBanner("allocNotAllottedWrap", effectiveNotAllotted(board));
+
   const wrap = document.getElementById("allocWrap");
-  wrap.innerHTML = data.courses.map(c => {
-    const allotted = c.allocatedFaculty;
+  wrap.innerHTML = saveBarHtml(board) + bundle.courseWise.map(c => {
+    const eff = allocMap[c.code];
+    let badgeName = null, rating = null, isPending = false;
+    if (eff) {
+      isPending = !!eff.pending;
+      if (isPending) {
+        badgeName = getPending(board)[c.code].facultyName;
+      } else {
+        badgeName = c.allocatedFaculty ? c.allocatedFaculty.name : eff.email;
+        rating = c.allocatedFaculty ? c.allocatedFaculty.rating : null;
+      }
+    }
     return `
     <div class="card mb-16" style="border-color:var(--line)">
       <div class="card-head">
@@ -294,12 +449,14 @@ function renderAllocation(board, data) {
           <h3 style="margin:0">${c.code} — ${c.name}</h3>
           <div class="muted" style="font-size:12px">${c.year} / ${c.sem}</div>
         </div>
-        ${allotted ? `<span class="badge badge-success">Allotted: ${allotted.name}</span>` : `<span class="badge badge-lock">Not allotted</span>`}
+        ${eff
+          ? `<span class="badge ${isPending ? "badge-warn" : "badge-success"}">${isPending ? "Pending: " : "Allotted: "}${badgeName}</span>`
+          : `<span class="badge badge-lock">Not allotted</span>`}
       </div>
       <div class="card-pad">
-        ${allotted ? `
+        ${eff ? `
           <div class="flex-between">
-            <div class="muted" style="font-size:13.5px">Rating: <strong>${allotted.rating} · ${RATING_LABELS[allotted.rating]}</strong></div>
+            <div class="muted" style="font-size:13.5px">${rating ? `Rating: <strong>${rating} · ${RATING_LABELS[rating]}</strong>` : (isPending ? "Staged — not saved yet" : "")}</div>
             <button class="btn btn-outline btn-sm unallocBtn" data-code="${c.code}">Remove allocation</button>
           </div>
         ` : (c.candidates.length ? `
@@ -307,17 +464,20 @@ function renderAllocation(board, data) {
           <table>
             <thead><tr><th>Faculty</th><th>Rating</th><th>Current allocations</th><th></th></tr></thead>
             <tbody>
-              ${c.candidates.map(cand => `
+              ${c.candidates.map(cand => {
+                const liveCount = countByEmail[norm(cand.email)] ?? cand.currentAllocCount;
+                return `
                 <tr>
                   <td>${cand.name}</td>
                   <td><span class="badge badge-gold">${cand.rating} · ${RATING_LABELS[cand.rating]}</span></td>
-                  <td class="muted">${cand.currentAllocCount} / 3</td>
+                  <td class="muted">${liveCount} / 3</td>
                   <td>
-                    ${cand.currentAllocCount >= 3
+                    ${liveCount >= 3
                       ? `<span class="q-lock">🔒 Max reached</span>`
-                      : `<button class="btn btn-sm btn-primary allocBtn" data-code="${c.code}" data-name="${c.name}" data-email="${cand.email}">Allocate</button>`}
+                      : `<button class="btn btn-sm btn-primary allocBtn" data-code="${c.code}" data-name="${c.name}" data-email="${cand.email}" data-facname="${cand.name}">Allocate</button>`}
                   </td>
-                </tr>`).join("")}
+                </tr>`;
+              }).join("")}
             </tbody>
           </table>
           </div>
@@ -326,24 +486,19 @@ function renderAllocation(board, data) {
     </div>`;
   }).join("");
 
+  bindSaveBar(board, () => renderAllocation(board));
+
   wrap.querySelectorAll(".allocBtn").forEach(btn => {
-    btn.addEventListener("click", async (e) => {
-      const { code, name, email } = e.target.dataset;
-      try {
-        await callApi("adminAllocateFaculty", { board, code, name, email });
-        toast("Faculty allocated.", "success");
-        loadAllocation(board);
-      } catch (err) { toast(err.message, "error"); }
+    btn.addEventListener("click", (e) => {
+      const { code, name, email, facname } = e.target.dataset;
+      stagePendingChange(board, { code, name, email, facultyName: facname, action: "allocate" });
+      renderAllocation(board);
     });
   });
   wrap.querySelectorAll(".unallocBtn").forEach(btn => {
-    btn.addEventListener("click", async (e) => {
-      const code = e.target.dataset.code;
-      try {
-        await callApi("adminUnallocate", { board, code });
-        toast("Allocation removed.", "success");
-        loadAllocation(board);
-      } catch (err) { toast(err.message, "error"); }
+    btn.addEventListener("click", (e) => {
+      stagePendingChange(board, { code: e.target.dataset.code, action: "unallocate" });
+      renderAllocation(board);
     });
   });
 }
@@ -351,85 +506,94 @@ function renderAllocation(board, data) {
 /* ---------------- Faculty-wise preference list ---------------- */
 async function loadFacultyPreferences(board) {
   const wrap = document.getElementById("facPrefWrap");
-  document.getElementById("facPrefNotAllottedWrap").innerHTML = "";
-  if (!board) { wrap.innerHTML = `<div class="empty-state"><div class="glyph">🧑‍🏫</div>Choose a board to view faculty preferences.</div>`; return; }
+  const bannerWrap = document.getElementById("facPrefNotAllottedWrap");
+  if (!board) { wrap.innerHTML = `<div class="empty-state"><div class="glyph">🧑‍🏫</div>Choose a board to view faculty preferences.</div>`; bannerWrap.innerHTML = ""; return; }
   wrap.innerHTML = `<div class="center" style="padding:30px"><div class="loader dark" style="margin:0 auto"></div></div>`;
   try {
-    const data = await callApi("adminGetFacultyPreferenceList", { board });
-    renderNotAllottedBanner("facPrefNotAllottedWrap", data.notAllotted);
-    renderFacultyPreferences(board, data);
+    await ensureBoardBundle(board);
+    renderFacultyPreferences(board);
   } catch (e) {
     wrap.innerHTML = `<div class="empty-state">${e.message}</div>`;
   }
 }
 
-function renderFacultyPreferences(board, data) {
+function renderFacultyPreferences(board) {
+  const bundle = ALLOC_CACHE[board];
+  const allocMap = effectiveAllocByCode(board);
+  const countByEmail = effectiveCountByEmail(board);
+  renderNotAllottedBanner("facPrefNotAllottedWrap", effectiveNotAllotted(board));
+
   const wrap = document.getElementById("facPrefWrap");
-  if (!data.faculty.length) {
-    wrap.innerHTML = `<div class="empty-state"><div class="glyph">🧑‍🏫</div>No faculty have submitted ratings for this board yet.</div>`;
+  if (!bundle.facultyPref.length) {
+    wrap.innerHTML = saveBarHtml(board) + `<div class="empty-state"><div class="glyph">🧑‍🏫</div>No faculty have submitted ratings for this board yet.</div>`;
+    bindSaveBar(board, () => renderFacultyPreferences(board));
     return;
   }
-  wrap.innerHTML = data.faculty.map(f => `
+
+  wrap.innerHTML = saveBarHtml(board) + bundle.facultyPref.map(f => {
+    const liveCount = countByEmail[norm(f.email)] ?? f.allocCount;
+    return `
     <div class="card mb-16" style="border-color:var(--line)">
       <div class="card-head">
         <div>
           <h3 style="margin:0">${f.name}</h3>
           <div class="muted" style="font-size:12px">${f.dept || "—"}</div>
         </div>
-        <span class="badge ${f.allocCount >= 3 ? 'badge-lock' : 'badge-gold'}">${f.allocCount} / 3 allotted</span>
+        <span class="badge ${liveCount >= 3 ? "badge-lock" : "badge-gold"}">${liveCount} / 3 allotted</span>
       </div>
       <div class="card-pad">
         <div class="table-wrap">
         <table>
           <thead><tr><th>Code</th><th>Course</th><th>Rating (preference)</th><th>Handled this sem</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            ${f.preferences.map(pref => `
+            ${f.preferences.map(pref => {
+              const eff = allocMap[pref.code];
+              const allocatedToSelf = !!(eff && norm(eff.email) === norm(f.email));
+              const allocatedToOther = !!(eff && norm(eff.email) !== norm(f.email));
+              const isPendingSelf = allocatedToSelf && eff.pending;
+              return `
               <tr>
                 <td style="font-family:var(--font-mono);font-weight:600">${pref.code}</td>
                 <td>${pref.name}</td>
                 <td><span class="badge badge-gold">${pref.rating} · ${RATING_LABELS[pref.rating]}</span></td>
                 <td>${pref.handled ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-lock">No</span>'}</td>
                 <td>
-                  ${pref.allocatedToSelf ? '<span class="badge badge-success">Allotted to them</span>'
-                    : pref.allocatedToOther ? '<span class="badge badge-warn">Allotted elsewhere</span>'
+                  ${allocatedToSelf ? `<span class="badge ${isPendingSelf ? "badge-warn" : "badge-success"}">${isPendingSelf ? "Pending — allotted to them" : "Allotted to them"}</span>`
+                    : allocatedToOther ? '<span class="badge badge-warn">Allotted elsewhere</span>'
                     : pref.handled ? '<span class="muted">Not eligible (handling)</span>'
                     : '<span class="badge badge-lock">Not allotted</span>'}
                 </td>
                 <td>
-                  ${pref.allocatedToSelf
+                  ${allocatedToSelf
                     ? `<button class="btn btn-outline btn-sm facPrefUnallocBtn" data-code="${pref.code}">Remove</button>`
-                    : (!pref.allocated && !pref.handled
-                        ? (f.allocCount >= 3
+                    : (!eff && !pref.handled
+                        ? (liveCount >= 3
                             ? `<span class="q-lock">🔒 Max reached</span>`
-                            : `<button class="btn btn-sm btn-primary facPrefAllocBtn" data-code="${pref.code}" data-name="${pref.name}" data-email="${f.email}">Allocate</button>`)
+                            : `<button class="btn btn-sm btn-primary facPrefAllocBtn" data-code="${pref.code}" data-name="${pref.name}" data-email="${f.email}" data-facname="${f.name}">Allocate</button>`)
                         : "")}
                 </td>
-              </tr>`).join("")}
+              </tr>`;
+            }).join("")}
           </tbody>
         </table>
         </div>
       </div>
-    </div>
-  `).join("");
+    </div>`;
+  }).join("");
+
+  bindSaveBar(board, () => renderFacultyPreferences(board));
 
   wrap.querySelectorAll(".facPrefAllocBtn").forEach(btn => {
-    btn.addEventListener("click", async (e) => {
-      const { code, name, email } = e.target.dataset;
-      try {
-        await callApi("adminAllocateFaculty", { board, code, name, email });
-        toast("Faculty allocated.", "success");
-        loadFacultyPreferences(board);
-      } catch (err) { toast(err.message, "error"); }
+    btn.addEventListener("click", (e) => {
+      const { code, name, email, facname } = e.target.dataset;
+      stagePendingChange(board, { code, name, email, facultyName: facname, action: "allocate" });
+      renderFacultyPreferences(board);
     });
   });
   wrap.querySelectorAll(".facPrefUnallocBtn").forEach(btn => {
-    btn.addEventListener("click", async (e) => {
-      const code = e.target.dataset.code;
-      try {
-        await callApi("adminUnallocate", { board, code });
-        toast("Allocation removed.", "success");
-        loadFacultyPreferences(board);
-      } catch (err) { toast(err.message, "error"); }
+    btn.addEventListener("click", (e) => {
+      stagePendingChange(board, { code: e.target.dataset.code, action: "unallocate" });
+      renderFacultyPreferences(board);
     });
   });
 }
@@ -437,63 +601,93 @@ function renderFacultyPreferences(board, data) {
 /* ---------------- Board-wise faculty x course matrix ---------------- */
 async function loadBoardMatrix(board) {
   const wrap = document.getElementById("matrixWrap");
-  document.getElementById("matrixNotAllottedWrap").innerHTML = "";
-  if (!board) { wrap.innerHTML = `<div class="empty-state"><div class="glyph">🔲</div>Choose a board to view the matrix.</div>`; return; }
+  const bannerWrap = document.getElementById("matrixNotAllottedWrap");
+  if (!board) { wrap.innerHTML = `<div class="empty-state"><div class="glyph">🔲</div>Choose a board to view the matrix.</div>`; bannerWrap.innerHTML = ""; return; }
   wrap.innerHTML = `<div class="center" style="padding:30px"><div class="loader dark" style="margin:0 auto"></div></div>`;
   try {
-    const data = await callApi("adminGetBoardMatrix", { board });
-    renderNotAllottedBanner("matrixNotAllottedWrap", data.notAllotted);
-    renderBoardMatrix(board, data);
+    await ensureBoardBundle(board);
+    renderBoardMatrix(board);
   } catch (e) {
     wrap.innerHTML = `<div class="empty-state">${e.message}</div>`;
   }
 }
 
-function renderBoardMatrix(board, data) {
+function renderBoardMatrix(board) {
+  const bundle = ALLOC_CACHE[board];
+  const allocMap = effectiveAllocByCode(board);
+  const countByEmail = effectiveCountByEmail(board);
+  renderNotAllottedBanner("matrixNotAllottedWrap", effectiveNotAllotted(board));
+
   const wrap = document.getElementById("matrixWrap");
-  if (!data.matrix.length || !data.courses.length) {
-    wrap.innerHTML = `<div class="empty-state"><div class="glyph">🔲</div>No ratings submitted for this board yet.</div>`;
+  if (!bundle.matrix.length || !bundle.matrixCourses.length) {
+    wrap.innerHTML = saveBarHtml(board) + `<div class="empty-state"><div class="glyph">🔲</div>No ratings submitted for this board yet.</div>`;
+    bindSaveBar(board, () => renderBoardMatrix(board));
     return;
   }
-  wrap.innerHTML = `
+
+  wrap.innerHTML = saveBarHtml(board) + `
     <div class="table-wrap">
     <table>
       <thead>
         <tr>
           <th style="position:sticky;left:0;background:#FBFBFD">Faculty</th>
-          ${data.courses.map(c => `<th title="${c.name}" style="text-align:center">${c.code}${c.allocatedTo ? ' 🔒' : ''}</th>`).join("")}
+          ${bundle.matrixCourses.map(c => {
+            const eff = allocMap[c.code];
+            return `<th title="${c.name}" style="text-align:center">${c.code}${eff ? (eff.pending ? " 🟡" : " 🔒") : ""}</th>`;
+          }).join("")}
           <th>Allotted</th>
         </tr>
       </thead>
       <tbody>
-        ${data.matrix.map(row => `
+        ${bundle.matrix.map(row => {
+          const liveCount = countByEmail[norm(row.email)] ?? row.allocCount;
+          return `
           <tr data-email="${row.email}">
             <td style="position:sticky;left:0;background:#fff;font-weight:600">${row.name}<div class="muted" style="font-weight:400;font-size:11px">${row.dept || ""}</div></td>
             ${row.cells.map(cell => {
               if (cell.rating == null) return `<td class="center muted">—</td>`;
-              if (cell.allocated) return `<td class="center"><span class="badge badge-success" title="Allotted to ${row.name}">${cell.rating}</span></td>`;
-              if (cell.allocatedToOther) return `<td class="center"><span class="badge badge-lock" title="Allotted to another faculty member">${cell.rating}</span></td>`;
+              const eff = allocMap[cell.code];
+              const isSelf = !!(eff && norm(eff.email) === norm(row.email));
+              const isOther = !!(eff && norm(eff.email) !== norm(row.email));
+              if (isSelf && eff.pending) {
+                return `<td class="center"><button class="btn btn-sm matrixUndoBtn" style="background:#FFF6E5;border:1px solid #F0C36D" data-code="${cell.code}" title="Pending — click to undo">${cell.rating} ⏳</button></td>`;
+              }
+              if (isSelf) {
+                return `<td class="center"><button class="btn btn-sm matrixRemoveBtn" style="background:#E6F4EA;border:1px solid #34A853" data-code="${cell.code}" title="Allotted to ${row.name} — click to remove">${cell.rating} ✓</button></td>`;
+              }
+              if (isOther) return `<td class="center"><span class="badge badge-lock" title="Allotted to another faculty member">${cell.rating}</span></td>`;
               if (cell.handled) return `<td class="center"><span class="badge badge-lock" title="Already handling this course">${cell.rating}</span></td>`;
               return `<td class="center"><button class="btn btn-sm btn-outline matrixCellBtn" data-code="${cell.code}" data-email="${row.email}" data-name="${row.name}" title="Allocate ${cell.code} to ${row.name}">${cell.rating}</button></td>`;
             }).join("")}
-            <td class="center"><span class="badge ${row.allocCount >= 3 ? 'badge-lock' : 'badge-gold'}">${row.allocCount}/3</span></td>
-          </tr>
-        `).join("")}
+            <td class="center"><span class="badge ${liveCount >= 3 ? "badge-lock" : "badge-gold"}">${liveCount}/3</span></td>
+          </tr>`;
+        }).join("")}
       </tbody>
     </table>
     </div>
-    <div class="hint mt-16">Green = allotted to that faculty · grey number = rated but not available (already allotted elsewhere, or already handling it) · outlined button = click to allocate.</div>
+    <div class="hint mt-16">Green ✓ = allotted to that faculty (click to remove) · yellow ⏳ = staged, not saved yet (click to undo) · grey number = rated but not available · outlined button = click to allocate.</div>
   `;
 
+  bindSaveBar(board, () => renderBoardMatrix(board));
+
   wrap.querySelectorAll(".matrixCellBtn").forEach(btn => {
-    btn.addEventListener("click", async (e) => {
+    btn.addEventListener("click", (e) => {
       const { code, name, email } = e.target.dataset;
-      const courseName = (data.courses.find(c => c.code === code) || {}).name || "";
-      try {
-        await callApi("adminAllocateFaculty", { board, code, name: courseName, email });
-        toast(`Allocated ${code} to ${name}.`, "success");
-        loadBoardMatrix(board);
-      } catch (err) { toast(err.message, "error"); }
+      const courseName = (bundle.matrixCourses.find(c => c.code === code) || {}).name || "";
+      stagePendingChange(board, { code, name: courseName, email, facultyName: name, action: "allocate" });
+      renderBoardMatrix(board);
+    });
+  });
+  wrap.querySelectorAll(".matrixUndoBtn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      delete getPending(board)[e.target.dataset.code];
+      renderBoardMatrix(board);
+    });
+  });
+  wrap.querySelectorAll(".matrixRemoveBtn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      stagePendingChange(board, { code: e.target.dataset.code, action: "unallocate" });
+      renderBoardMatrix(board);
     });
   });
 }
