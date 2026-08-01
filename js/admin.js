@@ -46,6 +46,7 @@ function bindTabs() {
       document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
       btn.classList.add("active");
       document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
+      if (btn.dataset.tab === "allocreport" && !currentAllocReport) loadAllocReport();
     });
   });
 }
@@ -167,13 +168,32 @@ function renderNotEntered() {
 
 /* ---------------- Board selects ---------------- */
 function populateBoardSelects() {
-  ["reportBoardSelect", "allocBoardSelect", "printBoardSelect"].forEach(id => {
+  ["reportBoardSelect", "allocBoardSelect", "facPrefBoardSelect", "matrixBoardSelect", "printBoardSelect"].forEach(id => {
     const sel = document.getElementById(id);
     sel.innerHTML = '<option value="">Choose board…</option>' + ADMIN_STATE.boards.map(b => `<option value="${b}">${b}</option>`).join("");
   });
   document.getElementById("reportBoardSelect").addEventListener("change", e => loadBoardReport(e.target.value));
   document.getElementById("allocBoardSelect").addEventListener("change", e => loadAllocation(e.target.value));
+  document.getElementById("facPrefBoardSelect").addEventListener("change", e => loadFacultyPreferences(e.target.value));
+  document.getElementById("matrixBoardSelect").addEventListener("change", e => loadBoardMatrix(e.target.value));
   document.getElementById("printBoardSelect").addEventListener("change", e => loadPrintSheet(e.target.value));
+}
+
+/* ---------------- Shared: "Not allotted" live banner ---------------- */
+function renderNotAllottedBanner(targetElId, notAllotted) {
+  const el = document.getElementById(targetElId);
+  if (!el) return;
+  if (!notAllotted || !notAllotted.length) {
+    el.innerHTML = `<div class="badge badge-success">✓ All courses in this board are allotted</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="locked-banner" style="align-items:flex-start;flex-wrap:wrap">
+      <span style="flex:none">📌 Not allotted (${notAllotted.length}):</span>
+      <span style="display:flex;flex-wrap:wrap;gap:6px">
+        ${notAllotted.map(code => `<span class="badge badge-lock" style="font-family:var(--font-mono)">${code}</span>`).join("")}
+      </span>
+    </div>`;
 }
 
 /* ---------------- Board report ---------------- */
@@ -248,13 +268,15 @@ document.getElementById("exportReportPdfBtn").addEventListener("click", () => {
   doc.save(`Board_Report_${currentReport.board}.pdf`);
 });
 
-/* ---------------- QP Allocation ---------------- */
+/* ---------------- QP Allocation (course-wise) ---------------- */
 async function loadAllocation(board) {
   const wrap = document.getElementById("allocWrap");
+  document.getElementById("allocNotAllottedWrap").innerHTML = "";
   if (!board) { wrap.innerHTML = `<div class="empty-state"><div class="glyph">📝</div>Choose a board to begin allocation.</div>`; return; }
   wrap.innerHTML = `<div class="center" style="padding:30px"><div class="loader dark" style="margin:0 auto"></div></div>`;
   try {
     const data = await callApi("adminGetAllocationData", { board });
+    renderNotAllottedBanner("allocNotAllottedWrap", data.notAllotted);
     renderAllocation(board, data);
   } catch (e) {
     wrap.innerHTML = `<div class="empty-state">${e.message}</div>`;
@@ -325,6 +347,232 @@ function renderAllocation(board, data) {
     });
   });
 }
+
+/* ---------------- Faculty-wise preference list ---------------- */
+async function loadFacultyPreferences(board) {
+  const wrap = document.getElementById("facPrefWrap");
+  document.getElementById("facPrefNotAllottedWrap").innerHTML = "";
+  if (!board) { wrap.innerHTML = `<div class="empty-state"><div class="glyph">🧑‍🏫</div>Choose a board to view faculty preferences.</div>`; return; }
+  wrap.innerHTML = `<div class="center" style="padding:30px"><div class="loader dark" style="margin:0 auto"></div></div>`;
+  try {
+    const data = await callApi("adminGetFacultyPreferenceList", { board });
+    renderNotAllottedBanner("facPrefNotAllottedWrap", data.notAllotted);
+    renderFacultyPreferences(board, data);
+  } catch (e) {
+    wrap.innerHTML = `<div class="empty-state">${e.message}</div>`;
+  }
+}
+
+function renderFacultyPreferences(board, data) {
+  const wrap = document.getElementById("facPrefWrap");
+  if (!data.faculty.length) {
+    wrap.innerHTML = `<div class="empty-state"><div class="glyph">🧑‍🏫</div>No faculty have submitted ratings for this board yet.</div>`;
+    return;
+  }
+  wrap.innerHTML = data.faculty.map(f => `
+    <div class="card mb-16" style="border-color:var(--line)">
+      <div class="card-head">
+        <div>
+          <h3 style="margin:0">${f.name}</h3>
+          <div class="muted" style="font-size:12px">${f.dept || "—"}</div>
+        </div>
+        <span class="badge ${f.allocCount >= 3 ? 'badge-lock' : 'badge-gold'}">${f.allocCount} / 3 allotted</span>
+      </div>
+      <div class="card-pad">
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>Code</th><th>Course</th><th>Rating (preference)</th><th>Handled this sem</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${f.preferences.map(pref => `
+              <tr>
+                <td style="font-family:var(--font-mono);font-weight:600">${pref.code}</td>
+                <td>${pref.name}</td>
+                <td><span class="badge badge-gold">${pref.rating} · ${RATING_LABELS[pref.rating]}</span></td>
+                <td>${pref.handled ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-lock">No</span>'}</td>
+                <td>
+                  ${pref.allocatedToSelf ? '<span class="badge badge-success">Allotted to them</span>'
+                    : pref.allocatedToOther ? '<span class="badge badge-warn">Allotted elsewhere</span>'
+                    : pref.handled ? '<span class="muted">Not eligible (handling)</span>'
+                    : '<span class="badge badge-lock">Not allotted</span>'}
+                </td>
+                <td>
+                  ${pref.allocatedToSelf
+                    ? `<button class="btn btn-outline btn-sm facPrefUnallocBtn" data-code="${pref.code}">Remove</button>`
+                    : (!pref.allocated && !pref.handled
+                        ? (f.allocCount >= 3
+                            ? `<span class="q-lock">🔒 Max reached</span>`
+                            : `<button class="btn btn-sm btn-primary facPrefAllocBtn" data-code="${pref.code}" data-name="${pref.name}" data-email="${f.email}">Allocate</button>`)
+                        : "")}
+                </td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+  `).join("");
+
+  wrap.querySelectorAll(".facPrefAllocBtn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      const { code, name, email } = e.target.dataset;
+      try {
+        await callApi("adminAllocateFaculty", { board, code, name, email });
+        toast("Faculty allocated.", "success");
+        loadFacultyPreferences(board);
+      } catch (err) { toast(err.message, "error"); }
+    });
+  });
+  wrap.querySelectorAll(".facPrefUnallocBtn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      const code = e.target.dataset.code;
+      try {
+        await callApi("adminUnallocate", { board, code });
+        toast("Allocation removed.", "success");
+        loadFacultyPreferences(board);
+      } catch (err) { toast(err.message, "error"); }
+    });
+  });
+}
+
+/* ---------------- Board-wise faculty x course matrix ---------------- */
+async function loadBoardMatrix(board) {
+  const wrap = document.getElementById("matrixWrap");
+  document.getElementById("matrixNotAllottedWrap").innerHTML = "";
+  if (!board) { wrap.innerHTML = `<div class="empty-state"><div class="glyph">🔲</div>Choose a board to view the matrix.</div>`; return; }
+  wrap.innerHTML = `<div class="center" style="padding:30px"><div class="loader dark" style="margin:0 auto"></div></div>`;
+  try {
+    const data = await callApi("adminGetBoardMatrix", { board });
+    renderNotAllottedBanner("matrixNotAllottedWrap", data.notAllotted);
+    renderBoardMatrix(board, data);
+  } catch (e) {
+    wrap.innerHTML = `<div class="empty-state">${e.message}</div>`;
+  }
+}
+
+function renderBoardMatrix(board, data) {
+  const wrap = document.getElementById("matrixWrap");
+  if (!data.matrix.length || !data.courses.length) {
+    wrap.innerHTML = `<div class="empty-state"><div class="glyph">🔲</div>No ratings submitted for this board yet.</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="position:sticky;left:0;background:#FBFBFD">Faculty</th>
+          ${data.courses.map(c => `<th title="${c.name}" style="text-align:center">${c.code}${c.allocatedTo ? ' 🔒' : ''}</th>`).join("")}
+          <th>Allotted</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${data.matrix.map(row => `
+          <tr data-email="${row.email}">
+            <td style="position:sticky;left:0;background:#fff;font-weight:600">${row.name}<div class="muted" style="font-weight:400;font-size:11px">${row.dept || ""}</div></td>
+            ${row.cells.map(cell => {
+              if (cell.rating == null) return `<td class="center muted">—</td>`;
+              if (cell.allocated) return `<td class="center"><span class="badge badge-success" title="Allotted to ${row.name}">${cell.rating}</span></td>`;
+              if (cell.allocatedToOther) return `<td class="center"><span class="badge badge-lock" title="Allotted to another faculty member">${cell.rating}</span></td>`;
+              if (cell.handled) return `<td class="center"><span class="badge badge-lock" title="Already handling this course">${cell.rating}</span></td>`;
+              return `<td class="center"><button class="btn btn-sm btn-outline matrixCellBtn" data-code="${cell.code}" data-email="${row.email}" data-name="${row.name}" title="Allocate ${cell.code} to ${row.name}">${cell.rating}</button></td>`;
+            }).join("")}
+            <td class="center"><span class="badge ${row.allocCount >= 3 ? 'badge-lock' : 'badge-gold'}">${row.allocCount}/3</span></td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+    </div>
+    <div class="hint mt-16">Green = allotted to that faculty · grey number = rated but not available (already allotted elsewhere, or already handling it) · outlined button = click to allocate.</div>
+  `;
+
+  wrap.querySelectorAll(".matrixCellBtn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      const { code, name, email } = e.target.dataset;
+      const courseName = (data.courses.find(c => c.code === code) || {}).name || "";
+      try {
+        await callApi("adminAllocateFaculty", { board, code, name: courseName, email });
+        toast(`Allocated ${code} to ${name}.`, "success");
+        loadBoardMatrix(board);
+      } catch (err) { toast(err.message, "error"); }
+    });
+  });
+}
+
+/* ---------------- Allocation summary report (board-wise, faculty-wise, total) ---------------- */
+let currentAllocReport = null;
+
+async function loadAllocReport() {
+  const wrap = document.getElementById("allocReportWrap");
+  wrap.innerHTML = `<div class="center" style="padding:30px"><div class="loader dark" style="margin:0 auto"></div></div>`;
+  try {
+    currentAllocReport = await callApi("adminGetAllocationSummaryReport", {});
+    renderAllocReport();
+  } catch (e) {
+    wrap.innerHTML = `<div class="empty-state">${e.message}</div>`;
+  }
+}
+
+function renderAllocReport() {
+  const wrap = document.getElementById("allocReportWrap");
+  if (!currentAllocReport || !currentAllocReport.boards.length) {
+    wrap.innerHTML = `<div class="empty-state"><div class="glyph">📈</div>No allocations have been made yet.</div>`;
+    return;
+  }
+  wrap.innerHTML = currentAllocReport.boards.map(b => `
+    <h4 style="font-size:14px;margin:16px 0 8px">${b.board} Board</h4>
+    <div class="table-wrap mb-16">
+    <table>
+      <thead><tr><th>Faculty</th><th>Dept</th><th>Total allotted</th><th>Course codes</th></tr></thead>
+      <tbody>
+        ${b.faculty.map(f => `
+          <tr>
+            <td><strong>${f.name}</strong></td>
+            <td class="muted">${f.dept || "—"}</td>
+            <td><span class="badge badge-gold">${f.total}</span></td>
+            <td style="font-family:var(--font-mono);font-size:12.5px">${f.codes}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>
+    </div>
+  `).join("");
+}
+
+document.getElementById("refreshAllocReportBtn").addEventListener("click", loadAllocReport);
+
+document.getElementById("exportAllocReportExcelBtn").addEventListener("click", () => {
+  if (!currentAllocReport || !currentAllocReport.boards.length) { toast("Nothing to export yet.", "error"); return; }
+  const rows = [];
+  currentAllocReport.boards.forEach(b => {
+    b.faculty.forEach(f => rows.push({
+      Board: b.board, Faculty: f.name, Dept: f.dept, Total_Allotted: f.total, Course_Codes: f.codes
+    }));
+  });
+  exportTableToExcel(rows, "Allocation_Summary_Report");
+});
+
+document.getElementById("exportAllocReportPdfBtn").addEventListener("click", () => {
+  if (!currentAllocReport || !currentAllocReport.boards.length) { toast("Nothing to export yet.", "error"); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(14);
+  doc.text("Board-wise · Faculty-wise Allocation Summary", 14, 16);
+  let y = 24;
+  currentAllocReport.boards.forEach(b => {
+    if (y > 260) { doc.addPage(); y = 16; }
+    doc.setFontSize(11);
+    doc.text(`${b.board} Board`, 14, y);
+    doc.autoTable({
+      startY: y + 4,
+      head: [["Faculty", "Dept", "Total", "Course Codes"]],
+      body: b.faculty.map(f => [f.name, f.dept || "—", String(f.total), f.codes]),
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [22, 35, 63] },
+      margin: { left: 14, right: 14 }
+    });
+    y = doc.lastAutoTable.finalY + 12;
+  });
+  doc.save("Allocation_Summary_Report.pdf");
+});
 
 /* ---------------- Print / Export ---------------- */
 let currentPrintData = null;
