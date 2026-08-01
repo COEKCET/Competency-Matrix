@@ -48,6 +48,9 @@
       <button class="tab-btn" data-tab="notentered">Not Entered</button>
       <button class="tab-btn" data-tab="reports">Board Reports</button>
       <button class="tab-btn" data-tab="allocation">QP Allocation</button>
+      <button class="tab-btn" data-tab="facprefs">Faculty Preference</button>
+      <button class="tab-btn" data-tab="boardmatrix">Board Matrix</button>
+      <button class="tab-btn" data-tab="allocreport">Allocation Report</button>
       <button class="tab-btn" data-tab="print">Print / Export</button>
     </div>
 
@@ -104,16 +107,65 @@
       </div>
     </div>
 
-    <!-- ============ QP ALLOCATION TAB ============ -->
+    <!-- ============ QP ALLOCATION TAB (course-wise) ============ -->
     <div class="tab-panel" id="tab-allocation">
       <div class="card">
         <div class="card-head">
-          <h3>Question paper allocation</h3>
+          <h3>Question paper allocation — course-wise</h3>
           <select id="allocBoardSelect" class="pill-select"><option value="">Choose board…</option></select>
         </div>
         <div class="card-pad">
           <div class="hint mb-16">Each faculty member can be allotted a maximum of <strong>3</strong> question papers. Faculty already handling a course in the current semester are not listed as candidates for that course. Choosing a faculty member here locks the paper against that course.</div>
+          <div id="allocNotAllottedWrap" class="mb-16"></div>
           <div id="allocWrap"><div class="empty-state"><div class="glyph">📝</div>Choose a board to begin allocation.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ FACULTY PREFERENCE TAB ============ -->
+    <div class="tab-panel" id="tab-facprefs">
+      <div class="card">
+        <div class="card-head">
+          <h3>Question paper allocation — faculty-wise preference list</h3>
+          <select id="facPrefBoardSelect" class="pill-select"><option value="">Choose board…</option></select>
+        </div>
+        <div class="card-pad">
+          <div class="hint mb-16">Each faculty member's rated courses, ranked by their own competency rating (highest first). Allocate directly from a faculty's preference list — the same 3-paper cap applies.</div>
+          <div id="facPrefNotAllottedWrap" class="mb-16"></div>
+          <div id="facPrefWrap"><div class="empty-state"><div class="glyph">🧑‍🏫</div>Choose a board to view faculty preferences.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ BOARD MATRIX TAB ============ -->
+    <div class="tab-panel" id="tab-boardmatrix">
+      <div class="card">
+        <div class="card-head">
+          <h3>Board-wise faculty × course competency matrix</h3>
+          <select id="matrixBoardSelect" class="pill-select"><option value="">Choose board…</option></select>
+        </div>
+        <div class="card-pad">
+          <div class="hint mb-16">Rows are faculty, columns are courses in this board. Click a rated cell to allocate that course to that faculty (max 3 per faculty, one faculty per course).</div>
+          <div id="matrixNotAllottedWrap" class="mb-16"></div>
+          <div id="matrixWrap"><div class="empty-state"><div class="glyph">🔲</div>Choose a board to view the matrix.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ ALLOCATION REPORT TAB ============ -->
+    <div class="tab-panel" id="tab-allocreport">
+      <div class="card">
+        <div class="card-head">
+          <h3>Board-wise · faculty-wise allocation summary</h3>
+          <div class="flex gap-8">
+            <button class="btn btn-outline btn-sm" id="refreshAllocReportBtn">Refresh</button>
+            <button class="btn btn-outline btn-sm" id="exportAllocReportExcelBtn">Excel</button>
+            <button class="btn btn-outline btn-sm" id="exportAllocReportPdfBtn">PDF</button>
+          </div>
+        </div>
+        <div class="card-pad">
+          <div class="hint mb-16">Total question papers allotted to each faculty member, per board, with the course codes.</div>
+          <div id="allocReportWrap"><div class="empty-state"><div class="glyph">📈</div>Loading…</div></div>
         </div>
       </div>
     </div>
