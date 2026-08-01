@@ -118,6 +118,15 @@
           <div class="hint mb-16">Each faculty member can be allotted a maximum of <strong>3</strong> question papers. Faculty already handling a course in the current semester are not listed as candidates for that course. Choosing a faculty member here locks the paper against that course.</div>
           <div id="allocNotAllottedWrap" class="mb-16"></div>
           <div id="allocWrap"><div class="empty-state"><div class="glyph">📝</div>Choose a board to begin allocation.</div></div>
+
+          <!-- Save / Discard bar — appears once you've allotted (or removed)
+               at least one course for the selected board. Stays hidden
+               otherwise; JS toggles display and the pending-count text. -->
+          <div class="flex gap-8 mt-16" id="allocSaveBar" style="display:none;align-items:center;justify-content:flex-end;border-top:1px solid var(--line);padding-top:16px">
+            <span class="muted" id="allocPendingText" style="margin-right:auto;font-size:13px"></span>
+            <button class="btn btn-outline btn-sm" id="allocDiscardBtn">Discard changes</button>
+            <button class="btn btn-primary btn-sm" id="allocSaveBtn">Save changes</button>
+          </div>
         </div>
       </div>
     </div>
@@ -133,6 +142,12 @@
           <div class="hint mb-16">Each faculty member's rated courses, ranked by their own competency rating (highest first). Allocate directly from a faculty's preference list — the same 3-paper cap applies.</div>
           <div id="facPrefNotAllottedWrap" class="mb-16"></div>
           <div id="facPrefWrap"><div class="empty-state"><div class="glyph">🧑‍🏫</div>Choose a board to view faculty preferences.</div></div>
+
+          <div class="flex gap-8 mt-16" id="facPrefSaveBar" style="display:none;align-items:center;justify-content:flex-end;border-top:1px solid var(--line);padding-top:16px">
+            <span class="muted" id="facPrefPendingText" style="margin-right:auto;font-size:13px"></span>
+            <button class="btn btn-outline btn-sm" id="facPrefDiscardBtn">Discard changes</button>
+            <button class="btn btn-primary btn-sm" id="facPrefSaveBtn">Save changes</button>
+          </div>
         </div>
       </div>
     </div>
@@ -148,6 +163,12 @@
           <div class="hint mb-16">Rows are faculty, columns are courses in this board. Click a rated cell to allocate that course to that faculty (max 3 per faculty, one faculty per course).</div>
           <div id="matrixNotAllottedWrap" class="mb-16"></div>
           <div id="matrixWrap"><div class="empty-state"><div class="glyph">🔲</div>Choose a board to view the matrix.</div></div>
+
+          <div class="flex gap-8 mt-16" id="matrixSaveBar" style="display:none;align-items:center;justify-content:flex-end;border-top:1px solid var(--line);padding-top:16px">
+            <span class="muted" id="matrixPendingText" style="margin-right:auto;font-size:13px"></span>
+            <button class="btn btn-outline btn-sm" id="matrixDiscardBtn">Discard changes</button>
+            <button class="btn btn-primary btn-sm" id="matrixSaveBtn">Save changes</button>
+          </div>
         </div>
       </div>
     </div>
